@@ -1,6 +1,7 @@
 use crate::metadata::{DependencyInfo, ParsedMetadata};
 use serde::Serialize;
 use std::collections::{HashSet, VecDeque};
+use std::env;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DependencySets {
@@ -97,7 +98,10 @@ fn reaches_target(parsed: &ParsedMetadata, start: &str, target: &str) -> bool {
 pub fn format_human(sets: &DependencySets) -> String {
     let mut output = String::new();
 
-    output.push_str("cargo-declared v0.1.0\n\n");
+    output.push_str(&format!(
+        "cargo-declared v{}\n\n",
+        env!("CARGO_PKG_VERSION")
+    ));
     output.push_str(&format!("declared:  {}\n", sets.declared.len()));
     output.push_str(&format!("compiled:  {}\n", sets.compiled.len()));
     output.push_str(&format!("delta:     {}\n", sets.delta.len()));

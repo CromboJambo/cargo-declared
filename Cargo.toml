@@ -1,6 +1,6 @@
 [package]
 name = "cargo-declared"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Audit the gap between declared and compiled dependencies"
 license = "MIT OR Apache-2.0"

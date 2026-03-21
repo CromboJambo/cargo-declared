@@ -1,10 +1,15 @@
 # cargo-declared
 
+[![Crates.io](https://img.shields.io/crates/v/cargo-declared.svg)](https://crates.io/crates/cargo-declared)
+[![Docs.rs](https://docs.rs/cargo-declared/badge.svg)](https://docs.rs/cargo-declared)
+[![License](https://img.shields.io/crates/l/cargo-declared.svg)](LICENSE)
+
 Audit the gap between declared and compiled dependencies.
 
 ## What it does
 
 Answers one question: **what compiled that you didn't explicitly ask for?**
+
 ```
 declared:  5
 compiled:  47
@@ -29,11 +34,13 @@ delta:     42
 Every feature request gets measured against this list.
 
 ## Install
+
 ```bash
 cargo install cargo-declared
 ```
 
 ## Usage
+
 ```bash
 cargo declared              # delta only, human readable
 cargo declared --json       # machine readable, pipe friendly
@@ -41,6 +48,7 @@ cargo declared --full       # all four sets
 ```
 
 ## Pipe into your audit log
+
 ```bash
 cargo declared --json | mirror-log add --source cargo-declared
 ```
