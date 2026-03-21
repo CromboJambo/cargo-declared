@@ -1,20 +1,19 @@
-use cargo_metadata::{CargoOpt, DependencyKind, Metadata, MetadataCommand};
-use std::path::PathBuf;
-use thiserror::Error;
+use cargo_metadata::{DependencyKind as CargoDependencyKind, Metadata, MetadataCommand, Package};
+use serde::Serialize;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-#[derive(Debug, Error)]
-pub enum MetadataError {
-    #[error("No Cargo.toml found at {0}")]
-    CargoTomlNotFound(PathBuf),
+use crate::error::{Error, Result};
 
-    #[error("Failed to run cargo metadata: {0}")]
-    CargoMetadataError(#[from] Box<dyn std::error::Error + Send + Sync>),
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DependencyKind {
+    Normal,
+    Development,
+    Build,
 }
 
-pub type Result<T> = std::result::Result<T, MetadataError>;
-
-/// Dependency information with its kind
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DependencyInfo {
     pub name: String,
     pub version: Option<String>,
@@ -22,176 +21,124 @@ pub struct DependencyInfo {
     pub kind: DependencyKind,
 }
 
-/// Parsed cargo metadata with dependency information
 #[derive(Debug, Clone)]
 pub struct ParsedMetadata {
-    /// Workspace root path
     pub workspace_root: PathBuf,
-    /// Package name from the manifest
     pub package_name: String,
-    /// All declared dependencies (including dev and build)
     pub declared_deps: Vec<DependencyInfo>,
-    /// Transitive compiled dependencies
     pub compiled_deps: Vec<DependencyInfo>,
-    /// Dependency graph for resolving 'via' information
-    pub dependencies: Vec<DependencyInfo>,
+    pub package_graph: HashMap<String, Vec<String>>,
 }
 
-/// Parse cargo metadata from the current directory or specified path
 pub fn parse_metadata(path: Option<PathBuf>) -> Result<ParsedMetadata> {
-    let metadata = if let Some(p) = path {
-        MetadataCommand::new().current_dir(p).exec()?
-    } else {
-        MetadataCommand::new().exec()?
-    };
-
-    let workspace_root = metadata.workspace_root.clone();
-    let package_name = metadata
-        .root
-        .as_ref()
-        .map(|p| p.name.clone())
-        .unwrap_or_default();
-
-    // Parse declared dependencies from the manifest
-    let declared_deps = parse_declared_deps(&metadata)?;
-
-    // Parse all dependencies from the metadata (including transitive)
-    let dependencies = parse_dependencies(&metadata);
-
-    // Filter to only the transitive compiled dependencies
-    let compiled_deps = dependencies
-        .into_iter()
-        .filter(|dep| {
-            // Only include dependencies that are not the root package
-            !dep.name.eq(&package_name)
-        })
-        .collect();
+    let metadata = load_metadata(path.as_deref())?;
+    let resolve = metadata.resolve.as_ref().ok_or(Error::NoRootPackage)?;
+    let root_id = resolve.root.as_ref().ok_or(Error::NoRootPackage)?;
+    let root_pkg = find_package(&metadata, root_id).ok_or(Error::NoRootPackage)?;
 
     Ok(ParsedMetadata {
-        workspace_root,
-        package_name,
-        declared_deps,
-        compiled_deps,
-        dependencies,
+        workspace_root: metadata.workspace_root.clone().into(),
+        package_name: root_pkg.name.clone(),
+        declared_deps: root_pkg.dependencies.iter().map(map_declared_dep).collect(),
+        compiled_deps: collect_compiled_deps(&metadata, root_id),
+        package_graph: build_package_graph(&metadata),
     })
 }
 
-/// Parse declared dependencies from the manifest
-fn parse_declared_deps(metadata: &Metadata) -> Result<Vec<DependencyInfo>> {
-    let manifest = metadata.manifest_path.as_path();
+fn load_metadata(path: Option<&Path>) -> Result<Metadata> {
+    let mut command = MetadataCommand::new();
 
-    let content =
-        std::fs::read_to_string(manifest).map_err(|e| MetadataError::CargoTomlReadError {
-            path: manifest.to_path_buf(),
-            source: e,
-        })?;
+    if let Some(path) = path {
+        if !path.exists() {
+            return Err(Error::PathNotFound {
+                path: path.to_path_buf(),
+            });
+        }
 
-    let toml: toml::Value =
-        toml::from_str(&content).map_err(|e| MetadataError::CargoTomlParseError {
-            path: manifest.to_path_buf(),
-            source: e,
-        })?;
-
-    let declared: Vec<DependencyInfo> = if let Some(table) = toml.get("dependencies") {
-        parse_dependency_table(table, DependencyKind::Normal)
-    } else {
-        vec![]
-    };
-
-    let dev: Vec<DependencyInfo> = if let Some(table) = toml.get("dev-dependencies") {
-        parse_dependency_table(table, DependencyKind::Development)
-    } else {
-        vec![]
-    };
-
-    let build: Vec<DependencyInfo> = if let Some(table) = toml.get("build-dependencies") {
-        parse_dependency_table(table, DependencyKind::Build)
-    } else {
-        vec![]
-    };
-
-    // Combine all declared dependencies
-    let mut all = declared;
-    all.extend(dev);
-    all.extend(build);
-
-    Ok(all)
-}
-
-/// Parse a dependency table from TOML
-fn parse_dependency_table(table: &toml::Value, kind: DependencyKind) -> Vec<DependencyInfo> {
-    match table {
-        toml::Value::Table(t) => t
-            .iter()
-            .filter_map(|(name, value)| {
-                let name = name.to_string();
-                let version = if let toml::Value::String(s) = value {
-                    Some(s.value().clone())
-                } else {
-                    None
-                };
-                let source = if let toml::Value::Table(table) = value {
-                    table.get("default-features").and_then(|v| {
-                        if let toml::Value::Bool(b) = v {
-                            if !b.value() {
-                                return Some(
-                                    "registry+https://github.com/rust-lang/crates.io-index"
-                                        .to_string(),
-                                );
-                            }
-                        }
-                        None
-                    })
-                } else {
-                    None
-                };
-                Some(DependencyInfo {
-                    name,
-                    version,
-                    source,
-                    kind,
-                })
-            })
-            .collect(),
-        _ => vec![],
-    }
-}
-
-/// Parse all dependencies from cargo metadata
-fn parse_dependencies(metadata: &Metadata) -> Vec<DependencyInfo> {
-    let mut deps = Vec::new();
-
-    for pkg in &metadata.packages {
-        for dep in &pkg.dependencies {
-            // Skip feature dependencies
-            if dep.features.is_empty() {
-                let kind = match dep.kind {
-                    cargo_metadata::DependencyKind::Normal => DependencyKind::Normal,
-                    cargo_metadata::DependencyKind::Development => DependencyKind::Development,
-                    cargo_metadata::DependencyKind::Build => DependencyKind::Build,
-                    cargo_metadata::DependencyKind::DevelopmentTool => DependencyKind::Development,
-                    cargo_metadata::DependencyKind::Unknown => DependencyKind::Normal,
-                };
-
-                let source = if let Some(reg) = &dep.source {
-                    if reg.starts_with("git+") {
-                        Some(format!("git+{}", reg.strip_prefix("git+").unwrap_or(reg)))
-                    } else {
-                        Some(reg.clone())
-                    }
-                } else {
-                    Some("registry+https://github.com/rust-lang/crates.io-index".to_string())
-                };
-
-                deps.push(DependencyInfo {
-                    name: dep.name.clone(),
-                    version: dep.version.clone(),
-                    source,
-                    kind,
-                });
-            }
+        if path.file_name().is_some_and(|name| name == "Cargo.toml") {
+            command.manifest_path(path);
+        } else {
+            command.current_dir(path);
         }
     }
 
-    deps
+    Ok(command.exec()?)
+}
+
+fn find_package<'a>(
+    metadata: &'a Metadata,
+    package_id: &cargo_metadata::PackageId,
+) -> Option<&'a Package> {
+    metadata.packages.iter().find(|pkg| &pkg.id == package_id)
+}
+
+fn map_declared_dep(dep: &cargo_metadata::Dependency) -> DependencyInfo {
+    DependencyInfo {
+        name: dep.rename.clone().unwrap_or_else(|| dep.name.clone()),
+        version: Some(dep.req.to_string()),
+        source: dep
+            .path
+            .as_ref()
+            .map(|path| format!("path+{}", path))
+            .or_else(|| dep.registry.clone()),
+        kind: map_kind(dep.kind),
+    }
+}
+
+fn map_kind(kind: cargo_metadata::DependencyKind) -> DependencyKind {
+    match kind {
+        CargoDependencyKind::Development => DependencyKind::Development,
+        CargoDependencyKind::Build => DependencyKind::Build,
+        CargoDependencyKind::Normal | CargoDependencyKind::Unknown => DependencyKind::Normal,
+    }
+}
+
+fn collect_compiled_deps(
+    metadata: &Metadata,
+    root_id: &cargo_metadata::PackageId,
+) -> Vec<DependencyInfo> {
+    let Some(resolve) = metadata.resolve.as_ref() else {
+        return Vec::new();
+    };
+
+    resolve
+        .nodes
+        .iter()
+        .filter(|node| &node.id != root_id)
+        .filter_map(|node| find_package(metadata, &node.id))
+        .map(|pkg| DependencyInfo {
+            name: pkg.name.clone(),
+            version: Some(pkg.version.to_string()),
+            source: pkg.source.as_ref().map(ToString::to_string),
+            kind: DependencyKind::Normal,
+        })
+        .collect()
+}
+
+fn build_package_graph(metadata: &Metadata) -> HashMap<String, Vec<String>> {
+    let id_to_name: HashMap<_, _> = metadata
+        .packages
+        .iter()
+        .map(|pkg| (pkg.id.clone(), pkg.name.clone()))
+        .collect();
+
+    let mut graph = HashMap::new();
+
+    if let Some(resolve) = &metadata.resolve {
+        for node in &resolve.nodes {
+            let Some(name) = id_to_name.get(&node.id) else {
+                continue;
+            };
+
+            let deps = node
+                .deps
+                .iter()
+                .map(|dep| dep.name.clone())
+                .collect::<Vec<_>>();
+
+            graph.insert(name.clone(), deps);
+        }
+    }
+
+    graph
 }

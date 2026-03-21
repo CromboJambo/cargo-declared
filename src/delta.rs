@@ -1,7 +1,7 @@
-use crate::metadata::{DependencyInfo, Metadata};
-use std::collections::{HashMap, HashSet};
+use crate::metadata::{DependencyInfo, ParsedMetadata};
+use serde::Serialize;
+use std::collections::{HashSet, VecDeque};
 
-/// Four sets of dependencies
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DependencySets {
     pub declared: Vec<DependencyInfo>,
@@ -10,8 +10,7 @@ pub struct DependencySets {
     pub orphaned: Vec<DependencyInfo>,
 }
 
-/// Entry in the delta set with 'via' information
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeltaEntry {
     pub name: String,
     pub version: Option<String>,
@@ -19,99 +18,104 @@ pub struct DeltaEntry {
     pub via: String,
 }
 
-/// Compute the four dependency sets from parsed metadata
-pub fn compute_sets(
-    declared: &[DependencyInfo],
-    compiled: &[DependencyInfo],
-    metadata: &Metadata,
-) -> DependencySets {
-    let declared_set: HashSet<_> = declared.iter().collect();
-    let compiled_set: HashSet<_> = compiled.iter().collect();
-
-    // Delta: compiled but not declared
-    let delta: Vec<DeltaEntry> = compiled
+pub fn compute_sets(parsed: &ParsedMetadata) -> DependencySets {
+    let declared_names = parsed
+        .declared_deps
         .iter()
-        .filter(|dep| !declared_set.contains(dep))
+        .map(|dep| dep.name.as_str())
+        .collect::<HashSet<_>>();
+    let compiled_names = parsed
+        .compiled_deps
+        .iter()
+        .map(|dep| dep.name.as_str())
+        .collect::<HashSet<_>>();
+
+    let delta = parsed
+        .compiled_deps
+        .iter()
+        .filter(|dep| !declared_names.contains(dep.name.as_str()))
         .map(|dep| DeltaEntry {
             name: dep.name.clone(),
             version: dep.version.clone(),
             source: dep.source.clone(),
-            via: via_dependency(dep, metadata),
+            via: via_dependency(parsed, &dep.name),
         })
         .collect();
 
-    // Orphaned: declared but not compiled
-    let orphaned: Vec<DependencyInfo> = declared
+    let orphaned = parsed
+        .declared_deps
         .iter()
-        .filter(|dep| !compiled_set.contains(dep))
+        .filter(|dep| !compiled_names.contains(dep.name.as_str()))
         .cloned()
         .collect();
 
     DependencySets {
-        declared: declared.to_vec(),
-        compiled: compiled.to_vec(),
+        declared: parsed.declared_deps.clone(),
+        compiled: parsed.compiled_deps.clone(),
         delta,
         orphaned,
     }
 }
 
-/// Find which declared dependency is the ancestor of a transitive dependency
-fn via_dependency(dep: &DependencyInfo, metadata: &Metadata) -> String {
-    // Build a map from package name to its dependencies
-    let package_deps: HashMap<&str, Vec<&str>> = metadata
-        .packages
-        .iter()
-        .map(|pkg| {
-            let name = pkg.name.as_str();
-            let deps: Vec<&str> = pkg
-                .dependencies
-                .iter()
-                .filter(|d| !d.features.is_empty()) // Only non-feature dependencies
-                .map(|d| d.name.as_str())
-                .collect();
-            (name, deps)
-        })
-        .collect();
+fn via_dependency(parsed: &ParsedMetadata, target: &str) -> String {
+    for dep in &parsed.declared_deps {
+        if dep.name == target {
+            return dep.name.clone();
+        }
 
-    // Build a map from package name to its info for lookup
-    let compiled_map: HashMap<&str, &DependencyInfo> =
-        compiled.iter().map(|d| (d.name.as_str(), d)).collect();
-
-    // Find a declared dependency that has this as a dependency
-    for declared_dep in declared {
-        if let Some(deps) = package_deps.get(&declared_dep.name.as_str()) {
-            if deps.contains(&dep.name.as_str()) {
-                return declared_dep.name.clone();
-            }
+        if reaches_target(parsed, &dep.name, target) {
+            return dep.name.clone();
         }
     }
 
-    // Fallback: use the package name if nothing found
     "unknown".to_string()
 }
 
-/// Format the dependency sets for human-readable output
+fn reaches_target(parsed: &ParsedMetadata, start: &str, target: &str) -> bool {
+    let mut queue = VecDeque::from([start.to_string()]);
+    let mut visited = HashSet::new();
+
+    while let Some(current) = queue.pop_front() {
+        if !visited.insert(current.clone()) {
+            continue;
+        }
+
+        let Some(children) = parsed.package_graph.get(&current) else {
+            continue;
+        };
+
+        if children.iter().any(|child| child == target) {
+            return true;
+        }
+
+        queue.extend(children.iter().cloned());
+    }
+
+    false
+}
+
 pub fn format_human(sets: &DependencySets) -> String {
     let mut output = String::new();
 
     output.push_str("cargo-declared v0.1.0\n\n");
-
     output.push_str(&format!("declared:  {}\n", sets.declared.len()));
     output.push_str(&format!("compiled:  {}\n", sets.compiled.len()));
     output.push_str(&format!("delta:     {}\n", sets.delta.len()));
 
     if !sets.delta.is_empty() {
-        output.push_str("\n+ transitive ({})\n", sets.delta.len());
+        output.push_str(&format!("\n+ transitive ({})\n", sets.delta.len()));
         for entry in &sets.delta {
             output.push_str(&format!(
-                "  {} {:?} via: {}\n",
-                entry.name, entry.version, entry.via
+                "  {} {} via: {}\n",
+                entry.name,
+                entry.version.as_deref().unwrap_or("unknown"),
+                entry.via
             ));
         }
     }
 
     if !sets.orphaned.is_empty() {
-        output.push_str("\n~ orphaned ({})\n", sets.orphaned.len());
+        output.push_str(&format!("\n~ orphaned ({})\n", sets.orphaned.len()));
         for dep in &sets.orphaned {
             output.push_str(&format!("  {}\n", dep.name));
         }
@@ -120,18 +124,12 @@ pub fn format_human(sets: &DependencySets) -> String {
     output
 }
 
-/// Format the dependency sets for JSON output
 pub fn format_json(sets: &DependencySets) -> Result<String, serde_json::Error> {
     let json = serde_json::json!({
-        "declared": sets.declared.iter().map(|d| d.name.clone()).collect::<Vec<_>>(),
-        "compiled": sets.compiled.iter().map(|d| d.name.clone()).collect::<Vec<_>>(),
-        "delta": sets.delta.iter().map(|d| serde_json::json!({
-            "name": d.name,
-            "version": d.version,
-            "source": d.source,
-            "via": d.via
-        })).collect::<Vec<_>>(),
-        "orphaned": sets.orphaned.iter().map(|d| d.name.clone()).collect::<Vec<_>>(),
+        "declared": sets.declared,
+        "compiled": sets.compiled,
+        "delta": sets.delta,
+        "orphaned": sets.orphaned,
         "summary": {
             "declared_count": sets.declared.len(),
             "compiled_count": sets.compiled.len(),
@@ -140,5 +138,5 @@ pub fn format_json(sets: &DependencySets) -> Result<String, serde_json::Error> {
         }
     });
 
-    Ok(serde_json::to_string_pretty(&json)?)
+    serde_json::to_string_pretty(&json)
 }
