@@ -13,14 +13,15 @@ pub fn display_json(parsed: &ParsedMetadata) -> Result<String, Error> {
 
 pub fn validate_invariant(parsed: &ParsedMetadata) -> Result<bool, Error> {
     let sets = crate::delta::compute_sets(parsed);
-    let invariant_holds = sets.declared.len() + sets.delta.len() == sets.compiled.len();
+    let invariant_holds =
+        sets.compiled.len() + sets.orphaned.len() == sets.declared.len() + sets.delta.len();
     Ok(invariant_holds)
 }
 
 pub fn display_invariant(invariant_holds: bool) -> String {
     if invariant_holds {
-        "Invariant holds: declared + delta = compiled".to_string()
+        "Invariant holds: compiled + orphaned = declared + delta".to_string()
     } else {
-        "Invariant violated: declared + delta != compiled".to_string()
+        "Invariant violated: compiled + orphaned != declared + delta".to_string()
     }
 }

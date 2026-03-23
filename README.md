@@ -42,9 +42,8 @@ cargo install cargo-declared
 ## Usage
 
 ```bash
-cargo declared              # delta only, human readable
-cargo declared --json       # machine readable, pipe friendly
-cargo declared --full       # all four sets
+cargo declared        # human readable
+cargo declared --json # machine readable, pipe friendly
 ```
 
 ## Pipe into your audit log

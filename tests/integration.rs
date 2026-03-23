@@ -10,6 +10,8 @@ fn write_manifest(dir: &TempDir) -> std::path::PathBuf {
     fs::create_dir_all(root.join("direct/src")).unwrap();
     fs::create_dir_all(root.join("transitive")).unwrap();
     fs::create_dir_all(root.join("transitive/src")).unwrap();
+    fs::create_dir_all(root.join("transitive2")).unwrap();
+    fs::create_dir_all(root.join("transitive2/src")).unwrap();
     fs::create_dir_all(root.join("unused")).unwrap();
     fs::create_dir_all(root.join("unused/src")).unwrap();
     fs::create_dir_all(root.join("src")).unwrap();
@@ -54,6 +56,9 @@ transitive = { path = "../transitive" }
 name = "transitive"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+transitive2 = { path = "../transitive2" }
 "#,
     )
     .unwrap();
@@ -61,6 +66,23 @@ edition = "2021"
     fs::write(
         root.join("transitive/src/lib.rs"),
         "pub fn transitive() {}\n",
+    )
+    .unwrap();
+
+    fs::write(
+        root.join("transitive2/Cargo.toml"),
+        r#"
+[package]
+name = "transitive2"
+version = "0.1.0"
+edition = "2021"
+"#,
+    )
+    .unwrap();
+
+    fs::write(
+        root.join("transitive2/src/lib.rs"),
+        "pub fn transitive2() {}\n",
     )
     .unwrap();
 
@@ -76,6 +98,97 @@ edition = "2021"
     .unwrap();
 
     fs::write(root.join("unused/src/lib.rs"), "pub fn unused() {}\n").unwrap();
+
+    root.join("Cargo.toml")
+}
+
+fn write_renamed_manifest(dir: &TempDir) -> std::path::PathBuf {
+    let root = dir.path();
+    fs::create_dir_all(root.join("dep/src")).unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+
+    fs::write(
+        root.join("Cargo.toml"),
+        r#"
+[package]
+name = "rename-root"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde_alias = { package = "dep-pkg", path = "dep" }
+"#,
+    )
+    .unwrap();
+
+    fs::write(root.join("src/lib.rs"), "pub fn root() {}\n").unwrap();
+
+    fs::write(
+        root.join("dep/Cargo.toml"),
+        r#"
+[package]
+name = "dep-pkg"
+version = "0.1.0"
+edition = "2021"
+"#,
+    )
+    .unwrap();
+
+    fs::write(root.join("dep/src/lib.rs"), "pub fn dep() {}\n").unwrap();
+
+    root.join("Cargo.toml")
+}
+
+fn write_build_manifest(dir: &TempDir) -> std::path::PathBuf {
+    let root = dir.path();
+    fs::create_dir_all(root.join("normal/src")).unwrap();
+    fs::create_dir_all(root.join("builddep/src")).unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+
+    fs::write(
+        root.join("Cargo.toml"),
+        r#"
+[package]
+name = "build-root"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+normal = { path = "normal" }
+
+[build-dependencies]
+builddep = { path = "builddep" }
+"#,
+    )
+    .unwrap();
+
+    fs::write(root.join("src/lib.rs"), "pub fn root() {}\n").unwrap();
+
+    fs::write(
+        root.join("normal/Cargo.toml"),
+        r#"
+[package]
+name = "normal"
+version = "0.1.0"
+edition = "2021"
+"#,
+    )
+    .unwrap();
+
+    fs::write(root.join("normal/src/lib.rs"), "pub fn normal() {}\n").unwrap();
+
+    fs::write(
+        root.join("builddep/Cargo.toml"),
+        r#"
+[package]
+name = "builddep"
+version = "0.1.0"
+edition = "2021"
+"#,
+    )
+    .unwrap();
+
+    fs::write(root.join("builddep/src/lib.rs"), "pub fn builddep() {}\n").unwrap();
 
     root.join("Cargo.toml")
 }
@@ -127,7 +240,7 @@ fn test_json_output_validity() {
 fn test_invariant_holds() {
     let temp_dir = TempDir::new().unwrap();
     let cargo_toml_path = write_manifest(&temp_dir);
-    assert!(!validate_invariant(Some(cargo_toml_path)).unwrap());
+    assert!(validate_invariant(Some(cargo_toml_path)).unwrap());
 }
 
 #[test]
@@ -138,4 +251,57 @@ fn test_parse_metadata_accepts_manifest_path() {
 
     assert_eq!(parsed.package_name, "test-package");
     assert!(parsed.declared_deps.iter().any(|dep| dep.name == "direct"));
+}
+
+#[test]
+fn test_transitive_dependency_tracking() {
+    let temp_dir = TempDir::new().unwrap();
+    let cargo_toml_path = write_manifest(&temp_dir);
+    let result = compute_and_display_human(Some(cargo_toml_path)).unwrap();
+
+    println!("Result: {}", result);
+
+    // Verify that both transitive dependencies are detected
+    assert!(result.contains("transitive"));
+    assert!(result.contains("transitive2"));
+
+    // Verify that transitive dependencies are listed in delta section
+    assert!(result.contains("transitive"));
+    assert!(result.contains("transitive2"));
+
+    // Verify that transitive dependencies have proper via information
+    assert!(result.contains("via: direct"));
+    assert!(result.contains("via: transitive"));
+}
+
+#[test]
+fn test_renamed_dependency_is_not_delta_or_orphaned() {
+    let temp_dir = TempDir::new().unwrap();
+    let cargo_toml_path = write_renamed_manifest(&temp_dir);
+    let result = compute_and_display_human(Some(cargo_toml_path)).unwrap();
+
+    assert!(result.contains("declared:  1"));
+    assert!(result.contains("compiled:  1"));
+    assert!(result.contains("delta:     0"));
+    assert!(!result.contains("dep-pkg 0.1.0 via:"));
+    assert!(!result.contains("serde_alias"));
+}
+
+#[test]
+fn test_compiled_dependency_kinds_are_preserved() {
+    let temp_dir = TempDir::new().unwrap();
+    let cargo_toml_path = write_build_manifest(&temp_dir);
+    let result = compute_and_display_json(Some(cargo_toml_path)).unwrap();
+    let json_value: serde_json::Value = serde_json::from_str(&result).unwrap();
+    let compiled = json_value.get("compiled").unwrap().as_array().unwrap();
+
+    let normal = compiled
+        .iter()
+        .find(|dep| dep.get("name").unwrap() == "normal");
+    let builddep = compiled
+        .iter()
+        .find(|dep| dep.get("name").unwrap() == "builddep");
+
+    assert_eq!(normal.unwrap().get("kind").unwrap(), "normal");
+    assert_eq!(builddep.unwrap().get("kind").unwrap(), "build");
 }

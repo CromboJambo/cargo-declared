@@ -11,10 +11,6 @@ struct Cli {
     #[arg(short, long, value_name = "PATH")]
     path: Option<PathBuf>,
 
-    /// Show all four sets of dependencies
-    #[arg(short, long)]
-    full: bool,
-
     /// Output in JSON format
     #[arg(short, long)]
     json: bool,
@@ -23,11 +19,9 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
-    let result = match (cli.json, cli.full) {
-        (true, true) => run_full_json(cli.path),
-        (true, false) => run_json(cli.path),
-        (false, true) => run_full_human(cli.path),
-        (false, false) => run_human(cli.path),
+    let result = match cli.json {
+        true => run_json(cli.path),
+        false => run_human(cli.path),
     };
 
     match result {
@@ -54,12 +48,4 @@ fn run_json(path: Option<PathBuf>) -> Result<String, Error> {
         CargoDeclared::new().with_path(path)
     });
     tool.run_json()
-}
-
-fn run_full_human(path: Option<PathBuf>) -> Result<String, Error> {
-    run_human(path)
-}
-
-fn run_full_json(path: Option<PathBuf>) -> Result<String, Error> {
-    run_json(path)
 }

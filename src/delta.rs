@@ -1,6 +1,6 @@
 use crate::metadata::{DependencyInfo, ParsedMetadata};
 use serde::Serialize;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,30 +23,35 @@ pub fn compute_sets(parsed: &ParsedMetadata) -> DependencySets {
     let declared_names = parsed
         .declared_deps
         .iter()
-        .map(|dep| dep.name.as_str())
+        .map(dependency_identity)
         .collect::<HashSet<_>>();
     let compiled_names = parsed
         .compiled_deps
         .iter()
-        .map(|dep| dep.name.as_str())
+        .map(dependency_identity)
         .collect::<HashSet<_>>();
+    let predecessors = shortest_predecessors(parsed);
 
     let delta = parsed
         .compiled_deps
         .iter()
-        .filter(|dep| !declared_names.contains(dep.name.as_str()))
+        .filter(|dep| !declared_names.contains(&dependency_identity(dep)))
         .map(|dep| DeltaEntry {
             name: dep.name.clone(),
             version: dep.version.clone(),
             source: dep.source.clone(),
-            via: via_dependency(parsed, &dep.name),
+            via: dep
+                .package_id
+                .as_deref()
+                .map(|package_id| via_dependency(parsed, package_id, &predecessors))
+                .unwrap_or_else(|| "unknown".to_string()),
         })
         .collect();
 
     let orphaned = parsed
         .declared_deps
         .iter()
-        .filter(|dep| !compiled_names.contains(dep.name.as_str()))
+        .filter(|dep| !compiled_names.contains(&dependency_identity(dep)))
         .cloned()
         .collect();
 
@@ -58,23 +63,16 @@ pub fn compute_sets(parsed: &ParsedMetadata) -> DependencySets {
     }
 }
 
-fn via_dependency(parsed: &ParsedMetadata, target: &str) -> String {
-    for dep in &parsed.declared_deps {
-        if dep.name == target {
-            return dep.name.clone();
-        }
-
-        if reaches_target(parsed, &dep.name, target) {
-            return dep.name.clone();
-        }
-    }
-
-    "unknown".to_string()
+fn dependency_identity(dep: &DependencyInfo) -> String {
+    dep.package_id
+        .clone()
+        .unwrap_or_else(|| format!("unresolved:{}:{}", dep.kind_key(), dep.package_name))
 }
 
-fn reaches_target(parsed: &ParsedMetadata, start: &str, target: &str) -> bool {
-    let mut queue = VecDeque::from([start.to_string()]);
+fn shortest_predecessors(parsed: &ParsedMetadata) -> HashMap<String, String> {
+    let mut queue = VecDeque::from([parsed.root_package_id.clone()]);
     let mut visited = HashSet::new();
+    let mut predecessors = HashMap::new();
 
     while let Some(current) = queue.pop_front() {
         if !visited.insert(current.clone()) {
@@ -85,14 +83,47 @@ fn reaches_target(parsed: &ParsedMetadata, start: &str, target: &str) -> bool {
             continue;
         };
 
-        if children.iter().any(|child| child == target) {
-            return true;
+        for child in children {
+            if !predecessors.contains_key(child) {
+                predecessors.insert(child.clone(), current.clone());
+            }
+            queue.push_back(child.clone());
         }
-
-        queue.extend(children.iter().cloned());
     }
 
-    false
+    predecessors
+}
+
+fn via_dependency(
+    parsed: &ParsedMetadata,
+    target: &str,
+    predecessors: &HashMap<String, String>,
+) -> String {
+    predecessors
+        .get(target)
+        .filter(|parent| *parent != &parsed.root_package_id)
+        .and_then(|parent| {
+            parsed
+                .direct_dep_names
+                .get(parent)
+                .cloned()
+                .or_else(|| parsed.package_names.get(parent).cloned())
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+trait DependencyInfoExt {
+    fn kind_key(&self) -> &'static str;
+}
+
+impl DependencyInfoExt for DependencyInfo {
+    fn kind_key(&self) -> &'static str {
+        match self.kind {
+            crate::metadata::DependencyKind::Normal => "normal",
+            crate::metadata::DependencyKind::Development => "development",
+            crate::metadata::DependencyKind::Build => "build",
+        }
+    }
 }
 
 pub fn format_human(sets: &DependencySets) -> String {
