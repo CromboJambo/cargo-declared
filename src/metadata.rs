@@ -20,12 +20,6 @@ pub struct DependencyInfo {
     pub version: Option<String>,
     pub source: Option<String>,
     pub kind: DependencyKind,
-    #[serde(skip_serializing)]
-    pub package_name: String,
-    #[serde(skip_serializing)]
-    pub package_id: Option<String>,
-    #[serde(skip_serializing)]
-    pub optional: bool,
 }
 
 /// Internal struct for resolver operations
@@ -47,8 +41,6 @@ pub struct DependencySets {
     pub declared: Vec<DependencyInfo>,
     pub compiled: Vec<DependencyInfo>,
     pub delta: Vec<DeltaEntry>,
-    pub orphaned: Vec<DependencyInfo>,
-    pub optional: Vec<DependencyInfo>,
 }
 
 /// Entry in the delta (transitive dependencies) set
@@ -65,12 +57,14 @@ pub fn parse_metadata(path: Option<PathBuf>) -> Result<ParsedMetadata> {
     let resolve = metadata.resolve.as_ref().ok_or(Error::NoRootPackage)?;
     let root_id = resolve.root.as_ref().ok_or(Error::NoRootPackage)?;
     let root_pkg = find_package(&metadata, root_id).ok_or(Error::NoRootPackage)?;
-    let package_names = metadata
+
+    let package_names: HashMap<_, _> = metadata
         .packages
         .iter()
         .map(|pkg| (pkg.id.to_string(), pkg.name.clone()))
-        .collect::<HashMap<_, _>>();
-    let root_dep_ids = resolve
+        .collect();
+
+    let root_dep_ids: HashMap<_, _> = resolve
         .nodes
         .iter()
         .find(|node| &node.id == root_id)
@@ -81,19 +75,23 @@ pub fn parse_metadata(path: Option<PathBuf>) -> Result<ParsedMetadata> {
                 .collect::<HashMap<_, _>>()
         })
         .unwrap_or_default();
-    let declared_deps = root_pkg
+
+    let declared_deps: Vec<_> = root_pkg
         .dependencies
         .iter()
-        .map(|dep| map_declared_dep(dep, root_dep_ids.get(dependency_display_name(dep)).cloned()))
-        .collect::<Vec<_>>();
-    let direct_dep_names = declared_deps
-        .iter()
-        .filter_map(|dep| {
-            dep.package_id
-                .clone()
-                .map(|package_id| (package_id, dep.name.clone()))
+        .map(|dep| map_declared_dep(dep))
+        .collect();
+
+    let direct_dep_names: HashMap<_, _> = root_dep_ids
+        .into_iter()
+        .filter_map(|(name, package_id)| {
+            root_pkg
+                .dependencies
+                .iter()
+                .find(|dep| dependency_display_name(dep) == name)
+                .map(|dep| (package_id, dep.name.clone()))
         })
-        .collect::<HashMap<_, _>>();
+        .collect();
 
     Ok(ParsedMetadata {
         workspace_root: metadata.workspace_root.clone().into(),
@@ -138,10 +136,7 @@ fn dependency_display_name(dep: &cargo_metadata::Dependency) -> &str {
     dep.rename.as_deref().unwrap_or(&dep.name)
 }
 
-fn map_declared_dep(
-    dep: &cargo_metadata::Dependency,
-    package_id: Option<String>,
-) -> DependencyInfo {
+fn map_declared_dep(dep: &cargo_metadata::Dependency) -> DependencyInfo {
     DependencyInfo {
         name: dependency_display_name(dep).to_string(),
         version: Some(dep.req.to_string()),
@@ -151,9 +146,6 @@ fn map_declared_dep(
             .map(|path| format!("path+{}", path))
             .or_else(|| dep.registry.clone()),
         kind: map_kind(dep.kind),
-        package_name: dep.name.clone(),
-        package_id,
-        optional: map_optional(dep.kind),
     }
 }
 
@@ -218,9 +210,6 @@ fn collect_compiled_deps(
             version: Some(pkg.version.to_string()),
             source: pkg.source.as_ref().map(ToString::to_string),
             kind: kind.clone(),
-            package_name: pkg.name.clone(),
-            package_id: Some(pkg.id.to_string()),
-            optional: false,
         })
         .collect()
 }

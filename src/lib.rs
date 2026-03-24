@@ -21,11 +21,6 @@ pub fn compute_and_display_json(path: Option<std::path::PathBuf>) -> Result<Stri
     display_json(&parsed)
 }
 
-pub fn validate_invariant(path: Option<std::path::PathBuf>) -> Result<bool, Error> {
-    let parsed = parse_metadata(path)?;
-    crate::output::validate_invariant(&parsed)
-}
-
 pub struct CargoDeclared {
     path: Option<std::path::PathBuf>,
 }

@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DependencySets {
     pub declared: Vec<DependencyInfo>,
     pub compiled: Vec<DependencyInfo>,
@@ -22,30 +22,51 @@ pub fn compute_sets(parsed: &ParsedMetadata) -> DependencySets {
     let declared_names = parsed
         .declared_deps
         .iter()
-        .map(dependency_identity)
+        .map(|dep| {
+            format!(
+                "{}:{}",
+                dep.name,
+                dep.version.as_deref().unwrap_or("unknown")
+            )
+        })
         .collect::<HashSet<_>>();
     let compiled_names = parsed
         .compiled_deps
         .iter()
-        .map(dependency_identity)
+        .map(|dep| {
+            format!(
+                "{}:{}",
+                dep.name,
+                dep.version.as_deref().unwrap_or("unknown")
+            )
+        })
         .collect::<HashSet<_>>();
     let predecessors = shortest_predecessors(parsed);
 
     let delta = parsed
         .compiled_deps
         .iter()
-        .filter(|dep| !declared_names.contains(&dependency_identity(dep)))
+        .filter(|dep| {
+            !declared_names.contains(&format!(
+                "{}:{}",
+                dep.name,
+                dep.version.as_deref().unwrap_or("unknown")
+            ))
+        })
         .map(|dep| DeltaEntry {
             name: dep.name.clone(),
             version: dep.version.clone(),
             source: dep.source.clone(),
-            via: dep
-                .package_id
-                .as_deref()
-                .map(|package_id| via_dependency(parsed, package_id, &predecessors))
-                .unwrap_or_else(|| "unknown".to_string()),
+            via: via_dependency(parsed, dep),
         })
-        .sorted_by(|a, b| a.name.cmp(&b.name).then_with(|| a.version.cmp(&b.version)))
+        .sorted_by(|a, b| {
+            a.name.cmp(&b.name).then_with(|| {
+                a.version
+                    .as_deref()
+                    .cmp(&b.version.as_deref().unwrap_or(""))
+                    .then_with(|| a.source.cmp(&b.source))
+            })
+        })
         .collect();
 
     DependencySets {
@@ -53,12 +74,6 @@ pub fn compute_sets(parsed: &ParsedMetadata) -> DependencySets {
         compiled: parsed.compiled_deps.clone(),
         delta,
     }
-}
-
-fn dependency_identity(dep: &DependencyInfo) -> String {
-    dep.package_id
-        .clone()
-        .unwrap_or_else(|| format!("unresolved:{}:{}", dep.kind_key(), dep.package_name))
 }
 
 fn shortest_predecessors(parsed: &ParsedMetadata) -> HashMap<String, String> {
@@ -86,36 +101,29 @@ fn shortest_predecessors(parsed: &ParsedMetadata) -> HashMap<String, String> {
     predecessors
 }
 
-fn via_dependency(
-    parsed: &ParsedMetadata,
-    target: &str,
-    predecessors: &HashMap<String, String>,
-) -> String {
-    predecessors
-        .get(target)
-        .filter(|parent| *parent != &parsed.root_package_id)
-        .and_then(|parent| {
-            parsed
-                .direct_dep_names
-                .get(parent)
-                .cloned()
-                .or_else(|| parsed.package_names.get(parent).cloned())
-        })
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
-trait DependencyInfoExt {
-    fn kind_key(&self) -> &'static str;
-}
-
-impl DependencyInfoExt for DependencyInfo {
-    fn kind_key(&self) -> &'static str {
-        match self.kind {
-            crate::metadata::DependencyKind::Normal => "normal",
-            crate::metadata::DependencyKind::Development => "development",
-            crate::metadata::DependencyKind::Build => "build",
+fn via_dependency(parsed: &ParsedMetadata, dep: &DependencyInfo) -> String {
+    // Find which direct dependency brought in this transitive dependency
+    // We need to match package_id to a direct dependency
+    if let Some(package_id) = &dep.version {
+        // Look up the package name from the package_id
+        if let Some(package_name) = parsed.package_names.get(package_id) {
+            // Check if this is a direct dependency
+            if parsed.declared_deps.iter().any(|d| d.name == *package_name) {
+                return package_name.clone();
+            }
         }
     }
+
+    // If we can't find it, check if it's a root dependency
+    if parsed
+        .declared_deps
+        .iter()
+        .any(|d| d.version == dep.version)
+    {
+        return "root".to_string();
+    }
+
+    "unknown".to_string()
 }
 
 pub fn format_human(sets: &DependencySets) -> String {
@@ -142,4 +150,8 @@ pub fn format_human(sets: &DependencySets) -> String {
     }
 
     output
+}
+
+pub fn format_json(sets: &DependencySets) -> Result<String, serde_json::Error> {
+    serde_json::to_string_pretty(&sets)
 }
