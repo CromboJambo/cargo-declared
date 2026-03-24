@@ -1,0 +1,8 @@
+[package]
+name = "multi-version-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+shared = { path = "shared-0.1.0" }
+shared-0.2 = { path = "shared-0.2.0" }
