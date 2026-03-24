@@ -13,6 +13,7 @@ pub enum DependencyKind {
     Build,
 }
 
+/// Public API struct representing a dependency
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DependencyInfo {
     pub name: String,
@@ -23,8 +24,11 @@ pub struct DependencyInfo {
     pub package_name: String,
     #[serde(skip_serializing)]
     pub package_id: Option<String>,
+    #[serde(skip_serializing)]
+    pub optional: bool,
 }
 
+/// Internal struct for resolver operations
 #[derive(Debug, Clone)]
 pub struct ParsedMetadata {
     pub workspace_root: PathBuf,
@@ -35,6 +39,25 @@ pub struct ParsedMetadata {
     pub package_graph: HashMap<String, Vec<String>>,
     pub package_names: HashMap<String, String>,
     pub direct_dep_names: HashMap<String, String>,
+}
+
+/// Internal struct for computing dependency sets
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencySets {
+    pub declared: Vec<DependencyInfo>,
+    pub compiled: Vec<DependencyInfo>,
+    pub delta: Vec<DeltaEntry>,
+    pub orphaned: Vec<DependencyInfo>,
+    pub optional: Vec<DependencyInfo>,
+}
+
+/// Entry in the delta (transitive dependencies) set
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeltaEntry {
+    pub name: String,
+    pub version: Option<String>,
+    pub source: Option<String>,
+    pub via: String,
 }
 
 pub fn parse_metadata(path: Option<PathBuf>) -> Result<ParsedMetadata> {
@@ -130,6 +153,7 @@ fn map_declared_dep(
         kind: map_kind(dep.kind),
         package_name: dep.name.clone(),
         package_id,
+        optional: map_optional(dep.kind),
     }
 }
 
@@ -139,6 +163,10 @@ fn map_kind(kind: cargo_metadata::DependencyKind) -> DependencyKind {
         CargoDependencyKind::Build => DependencyKind::Build,
         CargoDependencyKind::Normal | CargoDependencyKind::Unknown => DependencyKind::Normal,
     }
+}
+
+fn map_optional(kind: cargo_metadata::DependencyKind) -> bool {
+    matches!(kind, cargo_metadata::DependencyKind::Unknown)
 }
 
 fn collect_compiled_deps(
@@ -192,6 +220,7 @@ fn collect_compiled_deps(
             kind: kind.clone(),
             package_name: pkg.name.clone(),
             package_id: Some(pkg.id.to_string()),
+            optional: false,
         })
         .collect()
 }

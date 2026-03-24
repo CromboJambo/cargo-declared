@@ -9,6 +9,7 @@ pub struct DependencySets {
     pub compiled: Vec<DependencyInfo>,
     pub delta: Vec<DeltaEntry>,
     pub orphaned: Vec<DependencyInfo>,
+    pub optional: Vec<DependencyInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -51,7 +52,7 @@ pub fn compute_sets(parsed: &ParsedMetadata) -> DependencySets {
     let orphaned = parsed
         .declared_deps
         .iter()
-        .filter(|dep| !compiled_names.contains(&dependency_identity(dep)))
+        .filter(|dep| !compiled_names.contains(&dependency_identity(dep)) && !dep.optional)
         .cloned()
         .collect();
 
@@ -60,6 +61,12 @@ pub fn compute_sets(parsed: &ParsedMetadata) -> DependencySets {
         compiled: parsed.compiled_deps.clone(),
         delta,
         orphaned,
+        optional: parsed
+            .declared_deps
+            .iter()
+            .filter(|dep| dep.optional)
+            .cloned()
+            .collect(),
     }
 }
 

@@ -209,7 +209,7 @@ edition = "2021"
 
 [dependencies]
 shared = { path = "shared-0.1.0", version = "0.1.0" }
-shared-0.2 = { path = "shared-0.2.0", version = "0.2.0" }
+shared_v2 = { package = "shared", path = "shared-0.2.0", version = "0.2.0" }
 "#,
     )
     .unwrap();
@@ -319,8 +319,6 @@ fn test_transitive_dependency_tracking() {
     let cargo_toml_path = write_manifest(&temp_dir);
     let result = compute_and_display_human(Some(cargo_toml_path)).unwrap();
 
-    println!("Result: {}", result);
-
     // Verify that both transitive dependencies are detected
     assert!(result.contains("transitive"));
     assert!(result.contains("transitive2"));
@@ -370,7 +368,6 @@ fn test_compiled_dependency_kinds_are_preserved() {
 fn test_multi_version_package_name_collision() {
     let temp_dir = TempDir::new().unwrap();
     let cargo_toml_path = write_multi_version_manifest(&temp_dir);
-    let _result = compute_and_display_human(Some(cargo_toml_path.clone())).unwrap();
     let json_result = compute_and_display_json(Some(cargo_toml_path)).unwrap();
     let json_value: serde_json::Value = serde_json::from_str(&json_result).unwrap();
     let compiled = json_value.get("compiled").unwrap().as_array().unwrap();
@@ -394,8 +391,8 @@ fn test_multi_version_package_name_collision() {
         "shared should not be orphaned"
     );
     assert!(
-        !orphaned_names.iter().any(|name| *name == "shared-0.2"),
-        "shared-0.2 should not be orphaned"
+        !orphaned_names.iter().any(|name| *name == "shared_v2"),
+        "shared_v2 should not be orphaned"
     );
 
     // Both should be declared
@@ -407,7 +404,161 @@ fn test_multi_version_package_name_collision() {
         "shared should be declared"
     );
     assert!(
-        declared_names.iter().any(|name| *name == "shared-0.2"),
-        "shared-0.2 should be declared"
+        declared_names.iter().any(|name| *name == "shared_v2"),
+        "shared_v2 should be declared"
+    );
+}
+
+fn write_multi_version_transitive_manifest(dir: &TempDir) -> std::path::PathBuf {
+    let root = dir.path();
+    fs::create_dir_all(root.join("shared-0.1.0/src")).unwrap();
+    fs::create_dir_all(root.join("shared-0.2.0/src")).unwrap();
+    fs::create_dir_all(root.join("transitive-a/src")).unwrap();
+    fs::create_dir_all(root.join("transitive-b/src")).unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+
+    fs::write(
+        root.join("Cargo.toml"),
+        r#"
+[package]
+name = "multi-version-transitive-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+transitive-a = { path = "transitive-a" }
+transitive-b = { path = "transitive-b" }
+"#,
+    )
+    .unwrap();
+
+    fs::write(root.join("src/lib.rs"), "pub fn root() {}\n").unwrap();
+
+    fs::write(
+        root.join("shared-0.1.0/Cargo.toml"),
+        r#"
+[package]
+name = "shared"
+version = "0.1.0"
+edition = "2021"
+"#,
+    )
+    .unwrap();
+
+    fs::write(
+        root.join("shared-0.1.0/src/lib.rs"),
+        "pub fn shared_0_1_0() {}\n",
+    )
+    .unwrap();
+
+    fs::write(
+        root.join("shared-0.2.0/Cargo.toml"),
+        r#"
+[package]
+name = "shared"
+version = "0.2.0"
+edition = "2021"
+"#,
+    )
+    .unwrap();
+
+    fs::write(
+        root.join("shared-0.2.0/src/lib.rs"),
+        "pub fn shared_0_2_0() {}\n",
+    )
+    .unwrap();
+
+    fs::write(
+        root.join("transitive-a/Cargo.toml"),
+        r#"
+[package]
+name = "transitive-a"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+shared = { path = "../shared-0.1.0", version = "0.1.0" }
+"#,
+    )
+    .unwrap();
+
+    fs::write(
+        root.join("transitive-a/src/lib.rs"),
+        "pub fn transitive_a() {}\n",
+    )
+    .unwrap();
+
+    fs::write(
+        root.join("transitive-b/Cargo.toml"),
+        r#"
+[package]
+name = "transitive-b"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+shared = { path = "../shared-0.2.0", version = "0.2.0" }
+"#,
+    )
+    .unwrap();
+
+    fs::write(
+        root.join("transitive-b/src/lib.rs"),
+        "pub fn transitive_b() {}\n",
+    )
+    .unwrap();
+
+    root.join("Cargo.toml")
+}
+
+#[test]
+fn test_multi_version_transitive_chain() {
+    let temp_dir = TempDir::new().unwrap();
+    let cargo_toml_path = write_multi_version_transitive_manifest(&temp_dir);
+    let json_result = compute_and_display_json(Some(cargo_toml_path)).unwrap();
+    let json_value: serde_json::Value = serde_json::from_str(&json_result).unwrap();
+    let compiled = json_value.get("compiled").unwrap().as_array().unwrap();
+
+    // Both shared versions should be compiled (even though they have different transitive dependencies)
+    let shared_0_1_0 = compiled
+        .iter()
+        .find(|dep| dep.get("name").unwrap() == "shared" && dep.get("version").unwrap() == "0.1.0");
+    let shared_0_2 = compiled
+        .iter()
+        .find(|dep| dep.get("name").unwrap() == "shared" && dep.get("version").unwrap() == "0.2.0");
+
+    assert!(shared_0_1_0.is_some(), "shared 0.1.0 should be compiled");
+    assert!(shared_0_2.is_some(), "shared 0.2.0 should be compiled");
+
+    let orphaned = json_value.get("orphaned").unwrap().as_array().unwrap();
+    let orphaned_names: Vec<_> = orphaned.iter().filter_map(|dep| dep.get("name")).collect();
+
+    // Neither shared version should be orphaned
+    assert!(
+        !orphaned_names.iter().any(|name| *name == "shared"),
+        "shared should not be orphaned"
+    );
+    assert!(
+        !orphaned_names.iter().any(|name| *name == "shared_v2"),
+        "shared_v2 should not be orphaned"
+    );
+
+    let delta = json_value.get("delta").unwrap().as_array().unwrap();
+
+    assert!(
+        delta.iter().any(|dep| {
+            dep.get("name").unwrap() == "shared"
+                && dep.get("version").unwrap() == "0.1.0"
+                && dep.get("via").unwrap() == "transitive-a"
+        }),
+        "shared 0.1.0 should be delta via transitive-a"
+    );
+    assert!(
+        delta.iter().any(|dep| {
+            dep.get("name").unwrap() == "shared"
+                && dep.get("version").unwrap() == "0.2.0"
+                && dep.get("via").unwrap() == "transitive-b"
+        }),
+        "shared 0.2.0 should be delta via transitive-b"
     );
 }
