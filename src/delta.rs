@@ -8,8 +8,6 @@ pub struct DependencySets {
     pub declared: Vec<DependencyInfo>,
     pub compiled: Vec<DependencyInfo>,
     pub delta: Vec<DeltaEntry>,
-    pub orphaned: Vec<DependencyInfo>,
-    pub optional: Vec<DependencyInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -47,26 +45,13 @@ pub fn compute_sets(parsed: &ParsedMetadata) -> DependencySets {
                 .map(|package_id| via_dependency(parsed, package_id, &predecessors))
                 .unwrap_or_else(|| "unknown".to_string()),
         })
-        .collect();
-
-    let orphaned = parsed
-        .declared_deps
-        .iter()
-        .filter(|dep| !compiled_names.contains(&dependency_identity(dep)) && !dep.optional)
-        .cloned()
+        .sorted_by(|a, b| a.name.cmp(&b.name).then_with(|| a.version.cmp(&b.version)))
         .collect();
 
     DependencySets {
         declared: parsed.declared_deps.clone(),
         compiled: parsed.compiled_deps.clone(),
         delta,
-        orphaned,
-        optional: parsed
-            .declared_deps
-            .iter()
-            .filter(|dep| dep.optional)
-            .cloned()
-            .collect(),
     }
 }
 
@@ -156,29 +141,5 @@ pub fn format_human(sets: &DependencySets) -> String {
         }
     }
 
-    if !sets.orphaned.is_empty() {
-        output.push_str(&format!("\n~ orphaned ({})\n", sets.orphaned.len()));
-        for dep in &sets.orphaned {
-            output.push_str(&format!("  {}\n", dep.name));
-        }
-    }
-
     output
-}
-
-pub fn format_json(sets: &DependencySets) -> Result<String, serde_json::Error> {
-    let json = serde_json::json!({
-        "declared": sets.declared,
-        "compiled": sets.compiled,
-        "delta": sets.delta,
-        "orphaned": sets.orphaned,
-        "summary": {
-            "declared_count": sets.declared.len(),
-            "compiled_count": sets.compiled.len(),
-            "delta_count": sets.delta.len(),
-            "orphaned_count": sets.orphaned.len()
-        }
-    });
-
-    serde_json::to_string_pretty(&json)
 }

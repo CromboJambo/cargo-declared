@@ -266,16 +266,6 @@ fn test_delta_computation() {
 }
 
 #[test]
-fn test_orphaned_detection() {
-    let temp_dir = TempDir::new().unwrap();
-    let cargo_toml_path = write_manifest(&temp_dir);
-    let result = compute_and_display_human(Some(cargo_toml_path)).unwrap();
-
-    assert!(result.contains("orphaned"));
-    assert!(result.contains("unused"));
-}
-
-#[test]
 fn test_json_output_validity() {
     let temp_dir = TempDir::new().unwrap();
     let cargo_toml_path = write_manifest(&temp_dir);
