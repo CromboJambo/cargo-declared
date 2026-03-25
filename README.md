@@ -1,5 +1,18 @@
-# cargo-declared
-
+```
+ ██████╗ █████╗ ██████╗  ██████╗  ██████╗                       
+██╔════╝██╔══██╗██╔══██╗██╔════╝ ██╔═══██╗                      
+██║     ███████║██████╔╝██║  ███╗██║   ██║█████╗                
+██║     ██╔══██║██╔══██╗██║   ██║██║   ██║╚════╝                
+╚██████╗██║  ██║██║  ██║╚██████╔╝╚██████╔╝                      
+ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝                       
+                                                                
+██████╗ ███████╗ ██████╗██╗      █████╗ ██████╗ ███████╗██████╗ 
+██╔══██╗██╔════╝██╔════╝██║     ██╔══██╗██╔══██╗██╔════╝██╔══██╗
+██║  ██║█████╗  ██║     ██║     ███████║██████╔╝█████╗  ██║  ██║
+██║  ██║██╔══╝  ██║     ██║     ██╔══██║██╔══██╗██╔══╝  ██║  ██║
+██████╔╝███████╗╚██████╗███████╗██║  ██║██║  ██║███████╗██████╔╝
+╚═════╝ ╚══════╝ ╚═════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═════╝ 
+```                                                                
 [![Crates.io](https://img.shields.io/crates/v/cargo-declared.svg)](https://crates.io/crates/cargo-declared)
 [![Docs.rs](https://docs.rs/cargo-declared/badge.svg)](https://docs.rs/cargo-declared)
 [![License](https://img.shields.io/crates/l/cargo-declared.svg)](LICENSE)
@@ -8,9 +21,14 @@ Audit the gap between declared and compiled dependencies.
 
 ## What it does
 
-Answers one question: **what compiled that you didn't explicitly ask for?**
+Answers two closely related questions:
 
-```
+- What compiled that you did not explicitly ask for?
+- What did you declare that did not compile?
+
+```text
+cargo-declared v0.1.2
+
 declared:  5
 compiled:  47
 delta:     42
@@ -23,6 +41,8 @@ delta:     42
 ~ orphaned (0)
   none
 ```
+
+`delta` is the resolved transitive set. `orphaned` is the declared set that did not resolve into the compiled graph, which is most often optional or inactive dependencies.
 
 ## What it is not
 
@@ -44,6 +64,62 @@ cargo install cargo-declared
 ```bash
 cargo declared        # human readable
 cargo declared --json # machine readable, pipe friendly
+cargo declared --path /path/to/Cargo.toml
+cargo declared --path /path/to/workspace-member
+```
+
+## JSON output
+
+`--json` prints a single object with these top-level keys:
+
+- `declared`
+- `compiled`
+- `delta`
+- `orphaned`
+- `summary`
+
+Example:
+
+```json
+{
+  "declared": [
+    {
+      "name": "clap",
+      "version": "^4",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal"
+    }
+  ],
+  "compiled": [
+    {
+      "name": "clap",
+      "version": "4.6.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal"
+    },
+    {
+      "name": "clap_builder",
+      "version": "4.6.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal"
+    }
+  ],
+  "delta": [
+    {
+      "name": "clap_builder",
+      "version": "4.6.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "via": "clap"
+    }
+  ],
+  "orphaned": [],
+  "summary": {
+    "declared_count": 1,
+    "compiled_count": 2,
+    "delta_count": 1,
+    "orphaned_count": 0
+  }
+}
 ```
 
 ## Pipe into your audit log

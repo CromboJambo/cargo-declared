@@ -1,4 +1,4 @@
-use crate::metadata::{DependencyInfo, ParsedMetadata};
+use crate::metadata::{dependency_key, DependencyInfo, ParsedMetadata};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
@@ -8,6 +8,8 @@ pub struct DependencySets {
     pub declared: Vec<DependencyInfo>,
     pub compiled: Vec<DependencyInfo>,
     pub delta: Vec<DeltaEntry>,
+    pub orphaned: Vec<DependencyInfo>,
+    pub summary: Summary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -18,61 +20,75 @@ pub struct DeltaEntry {
     pub via: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Summary {
+    pub declared_count: usize,
+    pub compiled_count: usize,
+    pub delta_count: usize,
+    pub orphaned_count: usize,
+}
+
 pub fn compute_sets(parsed: &ParsedMetadata) -> DependencySets {
-    let declared_names = parsed
-        .declared_deps
+    let declared_ids = parsed
+        .declared_dep_ids
         .iter()
-        .map(|dep| {
-            format!(
-                "{}:{}",
-                dep.name,
-                dep.version.as_deref().unwrap_or("unknown")
-            )
-        })
+        .filter_map(|id| id.as_ref())
         .collect::<HashSet<_>>();
-    let compiled_names = parsed
+    let compiled_ids = parsed
         .compiled_deps
         .iter()
-        .map(|dep| {
-            format!(
-                "{}:{}",
-                dep.name,
-                dep.version.as_deref().unwrap_or("unknown")
-            )
-        })
+        .filter_map(|dep| dep_package_id(parsed, dep))
         .collect::<HashSet<_>>();
     let predecessors = shortest_predecessors(parsed);
 
-    let delta = parsed
+    let mut delta = parsed
         .compiled_deps
         .iter()
-        .filter(|dep| {
-            !declared_names.contains(&format!(
-                "{}:{}",
-                dep.name,
-                dep.version.as_deref().unwrap_or("unknown")
-            ))
-        })
+        .filter(|dep| dep_package_id(parsed, dep).is_some_and(|id| !declared_ids.contains(id)))
         .map(|dep| DeltaEntry {
             name: dep.name.clone(),
             version: dep.version.clone(),
             source: dep.source.clone(),
-            via: via_dependency(parsed, dep),
+            via: via_dependency(parsed, &predecessors, dep),
         })
-        .sorted_by(|a, b| {
-            a.name.cmp(&b.name).then_with(|| {
-                a.version
-                    .as_deref()
-                    .cmp(&b.version.as_deref().unwrap_or(""))
-                    .then_with(|| a.source.cmp(&b.source))
-            })
+        .collect::<Vec<_>>();
+    delta.sort_by(|a, b| {
+        a.name.cmp(&b.name).then_with(|| {
+            a.version
+                .as_deref()
+                .unwrap_or("")
+                .cmp(b.version.as_deref().unwrap_or(""))
+                .then_with(|| a.source.cmp(&b.source))
         })
-        .collect();
+    });
+
+    let mut orphaned = parsed
+        .declared_deps
+        .iter()
+        .zip(parsed.declared_dep_ids.iter())
+        .filter(|(_, package_id)| {
+            package_id
+                .as_ref()
+                .map(|id| !compiled_ids.contains(id))
+                .unwrap_or(true)
+        })
+        .map(|(dep, _)| dep.clone())
+        .collect::<Vec<_>>();
+    orphaned.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.version.cmp(&b.version)));
+
+    let summary = Summary {
+        declared_count: parsed.declared_deps.len(),
+        compiled_count: parsed.compiled_deps.len(),
+        delta_count: delta.len(),
+        orphaned_count: orphaned.len(),
+    };
 
     DependencySets {
         declared: parsed.declared_deps.clone(),
         compiled: parsed.compiled_deps.clone(),
         delta,
+        orphaned,
+        summary,
     }
 }
 
@@ -101,29 +117,31 @@ fn shortest_predecessors(parsed: &ParsedMetadata) -> HashMap<String, String> {
     predecessors
 }
 
-fn via_dependency(parsed: &ParsedMetadata, dep: &DependencyInfo) -> String {
-    // Find which direct dependency brought in this transitive dependency
-    // We need to match package_id to a direct dependency
-    if let Some(package_id) = &dep.version {
-        // Look up the package name from the package_id
-        if let Some(package_name) = parsed.package_names.get(package_id) {
-            // Check if this is a direct dependency
-            if parsed.declared_deps.iter().any(|d| d.name == *package_name) {
-                return package_name.clone();
-            }
-        }
-    }
+fn via_dependency(
+    parsed: &ParsedMetadata,
+    predecessors: &HashMap<String, String>,
+    dep: &DependencyInfo,
+) -> String {
+    let Some(package_id) = dep_package_id(parsed, dep) else {
+        return "unknown".to_string();
+    };
+    let Some(predecessor_id) = predecessors.get(package_id) else {
+        return "unknown".to_string();
+    };
 
-    // If we can't find it, check if it's a root dependency
-    if parsed
-        .declared_deps
-        .iter()
-        .any(|d| d.version == dep.version)
-    {
-        return "root".to_string();
-    }
+    parsed
+        .package_names
+        .get(predecessor_id)
+        .cloned()
+        .unwrap_or_else(|| "unknown".to_string())
+}
 
-    "unknown".to_string()
+fn dep_package_id<'a>(parsed: &'a ParsedMetadata, dep: &DependencyInfo) -> Option<&'a String> {
+    parsed.compiled_dep_ids.get(&dependency_key(
+        &dep.name,
+        dep.version.as_deref(),
+        dep.source.as_deref(),
+    ))
 }
 
 pub fn format_human(sets: &DependencySets) -> String {
@@ -145,6 +163,19 @@ pub fn format_human(sets: &DependencySets) -> String {
                 entry.name,
                 entry.version.as_deref().unwrap_or("unknown"),
                 entry.via
+            ));
+        }
+    }
+
+    output.push_str(&format!("\n~ orphaned ({})\n", sets.orphaned.len()));
+    if sets.orphaned.is_empty() {
+        output.push_str("  none\n");
+    } else {
+        for dep in &sets.orphaned {
+            output.push_str(&format!(
+                "  {} {}\n",
+                dep.name,
+                dep.version.as_deref().unwrap_or("unknown")
             ));
         }
     }

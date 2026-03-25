@@ -32,24 +32,8 @@ pub struct ParsedMetadata {
     pub compiled_deps: Vec<DependencyInfo>,
     pub package_graph: HashMap<String, Vec<String>>,
     pub package_names: HashMap<String, String>,
-    pub direct_dep_names: HashMap<String, String>,
-}
-
-/// Internal struct for computing dependency sets
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DependencySets {
-    pub declared: Vec<DependencyInfo>,
-    pub compiled: Vec<DependencyInfo>,
-    pub delta: Vec<DeltaEntry>,
-}
-
-/// Entry in the delta (transitive dependencies) set
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct DeltaEntry {
-    pub name: String,
-    pub version: Option<String>,
-    pub source: Option<String>,
-    pub via: String,
+    pub declared_dep_ids: Vec<Option<String>>,
+    pub compiled_dep_ids: HashMap<String, String>,
 }
 
 pub fn parse_metadata(path: Option<PathBuf>) -> Result<ParsedMetadata> {
@@ -82,14 +66,21 @@ pub fn parse_metadata(path: Option<PathBuf>) -> Result<ParsedMetadata> {
         .map(|dep| map_declared_dep(dep))
         .collect();
 
-    let direct_dep_names: HashMap<_, _> = root_dep_ids
-        .into_iter()
-        .filter_map(|(name, package_id)| {
-            root_pkg
-                .dependencies
-                .iter()
-                .find(|dep| dependency_display_name(dep) == name)
-                .map(|dep| (package_id, dep.name.clone()))
+    let declared_dep_ids = root_pkg
+        .dependencies
+        .iter()
+        .map(|dep| root_dep_ids.get(dependency_display_name(dep)).cloned())
+        .collect();
+    let compiled_dep_ids = metadata
+        .packages
+        .iter()
+        .map(|pkg| {
+            let version = pkg.version.to_string();
+            let source = pkg.source.as_ref().map(ToString::to_string);
+            (
+                dependency_key(&pkg.name, Some(&version), source.as_deref()),
+                pkg.id.to_string(),
+            )
         })
         .collect();
 
@@ -101,7 +92,8 @@ pub fn parse_metadata(path: Option<PathBuf>) -> Result<ParsedMetadata> {
         compiled_deps: collect_compiled_deps(&metadata, root_id),
         package_graph: build_package_graph(&metadata),
         package_names,
-        direct_dep_names,
+        declared_dep_ids,
+        compiled_dep_ids,
     })
 }
 
@@ -157,10 +149,6 @@ fn map_kind(kind: cargo_metadata::DependencyKind) -> DependencyKind {
     }
 }
 
-fn map_optional(kind: cargo_metadata::DependencyKind) -> bool {
-    matches!(kind, cargo_metadata::DependencyKind::Unknown)
-}
-
 fn collect_compiled_deps(
     metadata: &Metadata,
     root_id: &cargo_metadata::PackageId,
@@ -212,6 +200,15 @@ fn collect_compiled_deps(
             kind: kind.clone(),
         })
         .collect()
+}
+
+pub(crate) fn dependency_key(name: &str, version: Option<&str>, source: Option<&str>) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}",
+        name,
+        version.unwrap_or("unknown"),
+        source.unwrap_or("")
+    )
 }
 
 fn kind_rank(kind: &DependencyKind) -> u8 {

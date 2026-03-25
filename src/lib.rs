@@ -5,7 +5,7 @@ pub mod output;
 
 pub use crate::error::Error;
 use crate::metadata::ParsedMetadata;
-use crate::output::{display_human, display_json};
+use crate::output::{display_human, display_json, validate_invariant as validate_parsed_invariant};
 
 pub fn parse_metadata(path: Option<std::path::PathBuf>) -> Result<ParsedMetadata, Error> {
     crate::metadata::parse_metadata(path)
@@ -19,6 +19,11 @@ pub fn compute_and_display_human(path: Option<std::path::PathBuf>) -> Result<Str
 pub fn compute_and_display_json(path: Option<std::path::PathBuf>) -> Result<String, Error> {
     let parsed = parse_metadata(path)?;
     display_json(&parsed)
+}
+
+pub fn validate_invariant(path: Option<std::path::PathBuf>) -> Result<bool, Error> {
+    let parsed = parse_metadata(path)?;
+    Ok(validate_parsed_invariant(&parsed))
 }
 
 pub struct CargoDeclared {
