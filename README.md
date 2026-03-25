@@ -27,7 +27,6 @@ Answers two closely related questions:
 - What did you declare that did not compile?
 
 ```text
-cargo-declared v0.1.2
 
 declared:  5
 compiled:  47
