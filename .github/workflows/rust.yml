@@ -10,13 +10,52 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  # ── Fast feedback: formatting and lint ────────────────────────────────────
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy -- -D warnings
+
+  # ── Core: build and test ──────────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      - name: Build
+        run: cargo build --verbose
+      - name: Test
+        run: cargo nextest run
+
+  # ── Security: advisory and policy checks ─────────────────────────────────
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: Audit advisories
+        run: cargo audit
+      - name: Deny policy check
+        run: cargo deny check
+
+  # ── Dependency hygiene ────────────────────────────────────────────────────
+  deps:
+    name: Dependency Hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-machete
+        run: cargo install cargo-machete --locked
+      - name: Check for unused dependencies
+        run: cargo machete
