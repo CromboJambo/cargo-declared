@@ -45,8 +45,9 @@ untraceable unless you demultiply the tree first. The compiled dependency graph 
   independently testable and named.
 - **`.unwrap()` and `.clone()` are intentional prototyping choices, not debt.** Mark
   sites with `// TODO: propagate` when hardening is the right next step.
-- **Community amplification, not extraction.** The delta this tool surfaces should make
-  maintainers and funding links more visible, not strip-mine them.
+- **Surfacing, not extracting.** The delta this tool produces is information the user
+  already owns but couldn't see. Don't add features that obscure or reframe that
+  information.
 
 ---
 
@@ -153,7 +154,8 @@ Appropriate for: implementing a fully-specced feature, performing a targeted ref
 across multiple files, generating documentation from code.
 
 **Behavioral exits (agent should halt and surface state):**
-- `cargo test` fails after two self-correction attempts
+- `cargo nextest run` fails after two self-correction attempts
+- `cargo clippy -- -D warnings` introduces new warnings
 - A change would affect the public API surface
 - A dependency would be added or removed
 - The task scope has expanded beyond the original description
@@ -164,14 +166,26 @@ across multiple files, generating documentation from code.
 
 | Concern | Where to look |
 |---|---|
-| Dependency graph resolution | `src/resolve.rs` |
-| Declared vs compiled delta | `src/delta.rs` |
-| Output formatting | `src/output/` |
+| `cargo metadata` parsing and graph construction | `src/metadata.rs` |
+| Declared vs compiled delta computation | `src/delta.rs` |
+| Human and JSON output formatting | `src/output.rs` |
+| Public API surface (`CargoDeclared` builder) | `src/lib.rs` |
 | CLI entry point | `src/main.rs` |
-| Test fixtures | `tests/fixtures/` |
+| Error types | `src/error.rs` |
+| Integration test fixtures | `fixtures/` (repo root) |
 
 When in doubt: `cargo declared --help`, then read `src/main.rs` top to bottom. The data
-flow is linear by design.
+flow is linear by design: `main` → `CargoDeclared` → `metadata::parse_metadata` →
+`delta::compute_sets` → `output::display_*`.
+
+The correctness invariant lives in `output::validate_invariant`:
+
+```
+compiled_count == declared_count - orphaned_count + delta_count
+```
+
+After any edit to `delta.rs` or `metadata.rs`, run `validate_invariant` against the
+fixture manifests to confirm the invariant holds.
 
 ---
 

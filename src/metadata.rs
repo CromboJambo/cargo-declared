@@ -63,7 +63,7 @@ pub fn parse_metadata(path: Option<PathBuf>) -> Result<ParsedMetadata> {
     let declared_deps: Vec<_> = root_pkg
         .dependencies
         .iter()
-        .map(|dep| map_declared_dep(dep))
+        .map(map_declared_dep)
         .collect();
 
     let declared_dep_ids = root_pkg
