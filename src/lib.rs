@@ -1,8 +1,10 @@
+pub mod agent;
 pub mod delta;
 pub mod error;
 pub mod metadata;
 pub mod output;
 
+pub use crate::agent::{audit_graph, AuditError, AuditReport};
 pub use crate::error::Error;
 use crate::metadata::ParsedMetadata;
 use crate::output::{display_human, display_json, validate_invariant as validate_parsed_invariant};
