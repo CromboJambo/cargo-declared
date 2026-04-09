@@ -14,14 +14,22 @@ struct Cli {
     /// Output in JSON format
     #[arg(short, long)]
     json: bool,
+
+    /// Output in semantic-enhanced JSON format with tags and confidence scores
+    #[arg(long)]
+    json_semantic: bool,
 }
 
 fn main() {
     let cli = Cli::parse();
 
-    let result = match cli.json {
-        true => run_json(cli.path),
-        false => run_human(cli.path),
+    let result = match (cli.json, cli.json_semantic) {
+        (true, false) => run_json(cli.path),
+        (false, true) => run_semantic_json(cli.path),
+        (true, true) => Err(Error::Custom(
+            "Cannot use both --json and --json-semantic".to_string(),
+        )),
+        (false, false) => run_human(cli.path),
     };
 
     match result {
@@ -48,4 +56,11 @@ fn run_json(path: Option<PathBuf>) -> Result<String, Error> {
         CargoDeclared::new().with_path(path)
     });
     tool.run_json()
+}
+
+fn run_semantic_json(path: Option<PathBuf>) -> Result<String, Error> {
+    let tool = path.map_or_else(CargoDeclared::new, |path| {
+        CargoDeclared::new().with_path(path)
+    });
+    tool.run_semantic_json()
 }

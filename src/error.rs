@@ -19,6 +19,9 @@ pub enum Error {
         #[from]
         source: serde_json::Error,
     },
+
+    #[error("Custom error: {0}")]
+    Custom(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

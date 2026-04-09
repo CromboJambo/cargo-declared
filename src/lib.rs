@@ -1,13 +1,13 @@
-pub mod agent;
 pub mod delta;
 pub mod error;
 pub mod metadata;
 pub mod output;
+pub mod semantics;
 
-pub use crate::agent::{audit_graph, AuditError, AuditReport};
 pub use crate::error::Error;
 use crate::metadata::ParsedMetadata;
 use crate::output::{display_human, display_json, validate_invariant as validate_parsed_invariant};
+pub use crate::semantics::{analyze_semantics, generate_summary, SemanticOutput};
 
 pub fn parse_metadata(path: Option<std::path::PathBuf>) -> Result<ParsedMetadata, Error> {
     crate::metadata::parse_metadata(path)
@@ -26,6 +26,22 @@ pub fn compute_and_display_json(path: Option<std::path::PathBuf>) -> Result<Stri
 pub fn validate_invariant(path: Option<std::path::PathBuf>) -> Result<bool, Error> {
     let parsed = parse_metadata(path)?;
     Ok(validate_parsed_invariant(&parsed))
+}
+
+pub fn compute_and_display_semantic_json(
+    path: Option<std::path::PathBuf>,
+) -> Result<String, Error> {
+    let parsed = parse_metadata(path)?;
+    let semantic_deps = analyze_semantics(&parsed);
+    let summary = generate_summary(&semantic_deps);
+
+    let output = SemanticOutput {
+        package: parsed.package_name.clone(),
+        dependencies: semantic_deps,
+        summary,
+    };
+
+    serde_json::to_string_pretty(&output).map_err(Error::from)
 }
 
 pub struct CargoDeclared {
@@ -48,6 +64,10 @@ impl CargoDeclared {
 
     pub fn run_json(self) -> Result<String, Error> {
         compute_and_display_json(self.path)
+    }
+
+    pub fn run_semantic_json(self) -> Result<String, Error> {
+        compute_and_display_semantic_json(self.path)
     }
 }
 
